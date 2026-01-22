@@ -7761,6 +7761,11 @@ class MediaCard extends LitElement {
       this._log('⏸️ Ignoring video pause - card is disconnected');
       return;
     }
+
+    if (this._backgroundPaused) {
+      this._log('⏸️ Ignoring video pause - card hidden');
+      return;
+    }
     
     // V5.6: Ignore pause events during navigation
     // Browser auto-pauses videos when navigating away (clicking next/prev)
