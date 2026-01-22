@@ -4517,6 +4517,9 @@ class MediaCard extends LitElement {
     this._editorPreview = false; // V5.5: Flag to indicate card is in config editor preview
     this._cachedHeaderElement = null; // V5.6: Cached HA header element for viewport height calculation
     this._cachedHeaderSelector = null; // V5.6: Selector that found the cached header
+    this._backgroundPaused = false; // Visibility-based pause (IntersectionObserver)
+    this._visibilityObserver = null; // Track card visibility for pause/resume
+    this._backgroundVideoWasPlaying = false; // Track video state for visibility changes
     
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
@@ -4624,6 +4627,9 @@ class MediaCard extends LitElement {
     
     // V5.6: Setup dynamic viewport height calculation
     this._setupDynamicViewportHeight();
+
+    // V5.6.10: Track card visibility to pause/resume media when hidden
+    this._setupVisibilityObserver();
     
     // V5.6: Start clock update timer if clock enabled
     if (this.config.clock?.enabled) {
@@ -4648,6 +4654,9 @@ class MediaCard extends LitElement {
     
     // V5.6: Cleanup viewport height observer
     this._cleanupDynamicViewportHeight();
+
+    // V5.6.10: Cleanup visibility observer
+    this._cleanupVisibilityObserver();
     
     // Cleanup provider subscriptions to prevent memory leaks
     if (this.provider?.dispose) {
@@ -4820,6 +4829,98 @@ class MediaCard extends LitElement {
     if (this._headerVisibilityInterval) {
       clearInterval(this._headerVisibilityInterval);
       this._headerVisibilityInterval = null;
+    }
+  }
+
+  /**
+   * V5.6.10: Setup visibility observer for background pause
+   * Detects when card is hidden (conditional card/visibility toggle)
+   */
+  _setupVisibilityObserver() {
+    if (this._visibilityObserver || typeof IntersectionObserver === 'undefined') {
+      return;
+    }
+
+    this._visibilityObserver = new IntersectionObserver((entries) => {
+      const entry = entries?.[0];
+      if (!entry) return;
+      const isVisible = entry.isIntersecting && entry.intersectionRatio > 0;
+      this._handleVisibilityChange(isVisible);
+    }, {
+      threshold: 0.01
+    });
+
+    this._visibilityObserver.observe(this);
+  }
+
+  /**
+   * V5.6.10: Cleanup visibility observer
+   */
+  _cleanupVisibilityObserver() {
+    if (this._visibilityObserver) {
+      this._visibilityObserver.disconnect();
+      this._visibilityObserver = null;
+    }
+  }
+
+  /**
+   * V5.6.10: Pause/resume when card is hidden or shown
+   */
+  _handleVisibilityChange(isVisible) {
+    const shouldPause = !isVisible;
+    if (this._backgroundPaused === shouldPause) {
+      return;
+    }
+
+    this._backgroundPaused = shouldPause;
+
+    if (shouldPause) {
+      this._log('🫥 Card hidden - pausing background playback');
+      this._pauseTimer();
+
+      const videoElement = this.shadowRoot?.querySelector('video');
+      if (videoElement) {
+        this._backgroundVideoWasPlaying = !videoElement.paused && !videoElement.ended;
+        try {
+          videoElement.pause();
+          videoElement.currentTime = 0;
+        } catch (err) {
+          this._log('⚠️ Failed to reset video on hide:', err?.message || err);
+        }
+      } else {
+        this._backgroundVideoWasPlaying = false;
+      }
+
+      return;
+    }
+
+    this._log('👀 Card visible - resuming background playback');
+
+    if (!this._isPaused) {
+      this._resumeTimer();
+    }
+
+    const videoElement = this.shadowRoot?.querySelector('video');
+    if (videoElement) {
+      try {
+        videoElement.currentTime = 0;
+        videoElement.load();
+        this._videoHasEnded = false;
+        this._videoTimerCount = 0;
+        this._videoPlayStartTime = null;
+        this._videoUserInteracted = false;
+        this._videoWaitStartTime = null;
+      } catch (err) {
+        this._log('⚠️ Failed to reload video on show:', err?.message || err);
+      }
+
+      if (this.config.video_autoplay !== false && !this._isPaused) {
+        videoElement.play().catch(err => {
+          if (err.name !== 'AbortError') {
+            console.warn('Video autoplay failed after visibility change:', err);
+          }
+        });
+      }
     }
   }
   
