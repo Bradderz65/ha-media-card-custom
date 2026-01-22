@@ -4900,28 +4900,66 @@ class MediaCard extends LitElement {
       this._resumeTimer();
     }
 
-    const videoElement = this.shadowRoot?.querySelector('video');
-    if (videoElement) {
-      try {
-        videoElement.currentTime = 0;
-        videoElement.load();
-        this._videoHasEnded = false;
-        this._videoTimerCount = 0;
-        this._videoPlayStartTime = null;
-        this._videoUserInteracted = false;
-        this._videoWaitStartTime = null;
-      } catch (err) {
-        this._log('⚠️ Failed to reload video on show:', err?.message || err);
-      }
+    this._resumeVideoAfterVisibility(0);
+  }
 
-      if (this.config.video_autoplay !== false && !this._isPaused) {
-        videoElement.play().catch(err => {
-          if (err.name !== 'AbortError') {
-            console.warn('Video autoplay failed after visibility change:', err);
+  _resumeVideoAfterVisibility(attempt) {
+    const maxAttempts = 3;
+    this.updateComplete.then(() => {
+      requestAnimationFrame(() => {
+        const videoElement = this.shadowRoot?.querySelector('video');
+        if (!videoElement) {
+          if (attempt < maxAttempts) {
+            setTimeout(() => this._resumeVideoAfterVisibility(attempt + 1), 120);
           }
-        });
-      }
-    }
+          return;
+        }
+
+        try {
+          videoElement.currentTime = 0;
+          videoElement.load();
+          this._videoHasEnded = false;
+          this._videoTimerCount = 0;
+          this._videoPlayStartTime = null;
+          this._videoUserInteracted = false;
+          this._videoWaitStartTime = null;
+        } catch (err) {
+          this._log('⚠️ Failed to reload video on show:', err?.message || err);
+        }
+
+        const shouldAutoPlay = this._backgroundVideoWasPlaying || this.config.video_autoplay !== false;
+        this._backgroundVideoWasPlaying = false;
+
+        if (!shouldAutoPlay || this._isPaused) {
+          return;
+        }
+
+        const playPromise = videoElement.play();
+        if (playPromise?.catch) {
+          playPromise.catch(err => {
+            if (err.name === 'NotAllowedError' && !videoElement.muted) {
+              const previousMuted = videoElement.muted;
+              videoElement.muted = true;
+              videoElement.play().then(() => {
+                if (!previousMuted) {
+                  setTimeout(() => {
+                    videoElement.muted = previousMuted;
+                  }, 0);
+                }
+              }).catch(innerErr => {
+                if (innerErr.name !== 'AbortError') {
+                  console.warn('Video autoplay failed after visibility change:', innerErr);
+                }
+              });
+              return;
+            }
+            if (err.name !== 'AbortError') {
+              console.warn('Video autoplay failed after visibility change:', err);
+            }
+          });
+        }
+      });
+    });
   }
   
   /**
